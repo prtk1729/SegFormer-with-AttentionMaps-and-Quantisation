@@ -47,6 +47,10 @@ class segformer_mit_b3(nn.Module):
         outputs = self.get_attention_outputs(x)
         return outputs[-1].get('attn', None)
 
+    def get_selfattention_for_any_stage(self, x, stage_num):
+      outputs = self.get_attention_outputs(x)
+      return outputs[stage_num].get('attn', None)
+
 
 if __name__ == '__main__':
     # test here
