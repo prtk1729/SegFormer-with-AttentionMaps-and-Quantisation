@@ -44,11 +44,13 @@ class segformer_mit_b3(nn.Module):
         return self.backbone.get_attn_outputs(x)
 
     def get_last_selfattention(self, x):
-        outputs = self.get_attention_outputs(x)
+        outputs = self.get_attention_outputs(x)        
         return outputs[-1].get('attn', None)
 
     def get_selfattention_for_any_stage(self, x, stage_num):
       outputs = self.get_attention_outputs(x)
+      for i in range(len(outputs)):
+        print("Shape: ", outputs[i].get('attn', None).shape)      
       return outputs[stage_num].get('attn', None)
 
 

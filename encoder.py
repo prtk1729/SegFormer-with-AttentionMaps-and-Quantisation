@@ -28,7 +28,7 @@ class overlap_patch_embed(nn.Module):
     '''
     def __init__(self, patch_size, stride, in_chans, embed_dim):
         super().__init__()
-        self.patch_size = patch_size 
+        self.patch_size = patch_size
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=stride,
                               padding=(patch_size // 2, patch_size // 2))
         self.norm = nn.LayerNorm(embed_dim)
@@ -86,7 +86,9 @@ class efficient_self_attention(nn.Module):
         x = rearrange(x, 'b m hw c -> b hw (m c)')
         x = self.proj(x)
         x = F.dropout(x, p=self.dropout_p, training=self.training)
-        return x
+
+        attn_output = {'key' : k, 'query' : q, 'value' : v, 'attn' : attn}
+        return x, attn_output
     
 
 
@@ -133,7 +135,7 @@ class transformer_block(nn.Module):
         # Norm -> self-attention
         skip = x
         x = self.norm1(x)
-        x = self.attn(x, h, w)
+        x, attn_output = self.attn(x, h, w)
         x = drop_path(x, drop_prob=self.drop_path_p, training=self.training)
         x = x + skip
 
@@ -143,8 +145,7 @@ class transformer_block(nn.Module):
         x = self.ffn(x, h, w)
         x = drop_path(x, drop_prob=self.drop_path_p, training=self.training)
         x = x + skip
-        return x
-
+        return x, attn_output
 
 
 class mix_transformer_stage(nn.Module):
@@ -155,12 +156,26 @@ class mix_transformer_stage(nn.Module):
         self.norm = norm
 
     def forward(self, x):
+        # patch embedding and store required data
+        stage_output  = {}
+        stage_output['patch_embed_input'] = x
         x, h, w = self.patch_embed(x)
+        stage_output['patch_embed_h'] = h
+        stage_output['patch_embed_w'] = w
+        stage_output['patch_embed_output'] = x
+
         for block in self.blocks:
-            x = block(x, h, w)
+            x, attn_output = block(x, h, w)
+
         x = self.norm(x)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
-        return x
+
+        # store last attention block data
+        # in stages' output data
+        for k,v in attn_output.items():
+            stage_output[k] = v
+        del attn_output
+        return x, stage_output
 
 
 class Encoder(nn.Module):
@@ -193,16 +208,33 @@ class Encoder(nn.Module):
             patch_embed = overlap_patch_embed(patch_size, stride=stride, in_chans=in_chans,
                             embed_dim= embed_dims[stage_i])
             norm = nn.LayerNorm(embed_dims[stage_i], eps=1e-6)
+            # mix transform is the smaller reactangle capsulating
+            # Self-Attention and FFN in the diagram
+            # stage is the mix_transform_stage -> entire 3 things
+            # There are Nx of those in each stage
+            # All are in sequential order => Put in a nn.ModuleList()
+            # Total num of heads == Total num of such [OPM,ESA, FFN] == Total num of 
             self.stages.append(mix_transformer_stage(patch_embed, blocks, norm))
 
 
 
     def forward(self, x):
         outputs = []
-        for stage in self.stages:
-            x = stage(x)
+        for i,stage in enumerate(self.stages):
+            x, _ = stage(x)
             outputs.append(x)
         return outputs
+
+
+    def get_attn_outputs(self, x):
+        stage_outputs = []
+        num_stages = 0
+        for i,stage in enumerate(self.stages):
+            num_stages += 1
+            x, stage_data = stage(x)
+            stage_outputs.append(stage_data)
+        # print("==========>", num_stages)
+        return stage_outputs
 
 
 
